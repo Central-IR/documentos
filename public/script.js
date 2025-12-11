@@ -265,15 +265,41 @@ function renderItems(items) {
                 row.style.opacity = '0.5';
                 
                 try {
+                    // Buscar arquivo do servidor
                     const response = await fetch(`${API_URL}/download?path=${encodeURIComponent(item.path)}`, {
                         headers: { 'X-Session-Token': sessionToken }
                     });
                     
                     if (response.ok) {
                         const blob = await response.blob();
-                        const file = new File([blob], item.name, { type: blob.type });
+                        
+                        // Detectar MIME type correto
+                        let mimeType = blob.type || 'application/octet-stream';
+                        const ext = item.name.split('.').pop().toUpperCase();
+                        
+                        if (ext === 'PDF') mimeType = 'application/pdf';
+                        else if (ext === 'XML') mimeType = 'text/xml';
+                        else if (ext === 'DOCX') mimeType = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+                        else if (ext === 'DOC') mimeType = 'application/msword';
+                        else if (ext === 'XLSX') mimeType = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+                        else if (ext === 'XLS') mimeType = 'application/vnd.ms-excel';
+                        
+                        // Criar File com nome e tipo corretos
+                        const file = new File([blob], item.name, { 
+                            type: mimeType,
+                            lastModified: new Date(item.updated_at || item.created_at).getTime()
+                        });
+                        
+                        // Adicionar aos dados de transferência
                         e.dataTransfer.items.add(file);
+                        
+                        // Adicionar como URL também (para navegadores)
+                        const url = window.URL.createObjectURL(blob);
+                        e.dataTransfer.setData('text/uri-list', url);
                         e.dataTransfer.setData('text/plain', item.name);
+                        
+                        // Liberar URL após drag
+                        setTimeout(() => window.URL.revokeObjectURL(url), 5000);
                     }
                 } catch (error) {
                     console.error('Erro ao preparar arquivo:', error);
@@ -300,14 +326,18 @@ function renderItems(items) {
 
 function getFileIcon(extension) {
     const icons = {
-        'PDF': '📄',
-        'DOC': '📝',
-        'DOCX': '📝',
-        'XML': '🔖',
+        'PDF': '📕',
+        'DOC': '📘',
+        'DOCX': '📘',
+        'XLS': '📗',
+        'XLSX': '📗',
+        'XML': '📋',
         'TXT': '📄',
         'JPG': '🖼️',
         'JPEG': '🖼️',
-        'PNG': '🖼️'
+        'PNG': '🖼️',
+        'ZIP': '📦',
+        'RAR': '📦'
     };
     return icons[extension] || '📄';
 }
@@ -482,9 +512,29 @@ function renderSearchResults(results) {
                     });
                     if (response.ok) {
                         const blob = await response.blob();
-                        const file = new File([blob], item.name, { type: blob.type });
+                        
+                        let mimeType = blob.type || 'application/octet-stream';
+                        const ext = item.name.split('.').pop().toUpperCase();
+                        
+                        if (ext === 'PDF') mimeType = 'application/pdf';
+                        else if (ext === 'XML') mimeType = 'text/xml';
+                        else if (ext === 'DOCX') mimeType = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+                        else if (ext === 'DOC') mimeType = 'application/msword';
+                        else if (ext === 'XLSX') mimeType = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+                        else if (ext === 'XLS') mimeType = 'application/vnd.ms-excel';
+                        
+                        const file = new File([blob], item.name, { 
+                            type: mimeType,
+                            lastModified: new Date(item.updated_at || item.created_at).getTime()
+                        });
+                        
                         e.dataTransfer.items.add(file);
+                        
+                        const url = window.URL.createObjectURL(blob);
+                        e.dataTransfer.setData('text/uri-list', url);
                         e.dataTransfer.setData('text/plain', item.name);
+                        
+                        setTimeout(() => window.URL.revokeObjectURL(url), 5000);
                     }
                 } catch (error) {
                     console.error('Erro:', error);
@@ -736,21 +786,42 @@ window.viewFile = async function(filePath, fileName) {
     closeContextMenu();
     
     try {
-        const response = await fetch(`${API_URL}/download?path=${encodeURIComponent(filePath)}`, {
-            method: 'GET',
-            headers: { 'X-Session-Token': sessionToken }
-        });
+        const fileExtension = fileName.split('.').pop().toUpperCase();
+        
+        // PDFs e XMLs: abrir em nova aba diretamente
+        if (['PDF', 'XML', 'TXT', 'JPG', 'JPEG', 'PNG'].includes(fileExtension)) {
+            const response = await fetch(`${API_URL}/download?path=${encodeURIComponent(filePath)}`, {
+                method: 'GET',
+                headers: { 'X-Session-Token': sessionToken }
+            });
 
-        if (!response.ok) {
-            throw new Error('Erro ao visualizar arquivo');
+            if (!response.ok) {
+                throw new Error('Erro ao visualizar arquivo');
+            }
+
+            const blob = await response.blob();
+            
+            // Criar blob com tipo correto
+            let mimeType = 'application/octet-stream';
+            if (fileExtension === 'PDF') mimeType = 'application/pdf';
+            else if (fileExtension === 'XML') mimeType = 'text/xml';
+            else if (fileExtension === 'TXT') mimeType = 'text/plain';
+            else if (['JPG', 'JPEG'].includes(fileExtension)) mimeType = 'image/jpeg';
+            else if (fileExtension === 'PNG') mimeType = 'image/png';
+            
+            const typedBlob = new Blob([blob], { type: mimeType });
+            const url = window.URL.createObjectURL(typedBlob);
+            
+            // Abrir em nova aba
+            window.open(url, '_blank');
+            
+            // Liberar URL após um tempo
+            setTimeout(() => window.URL.revokeObjectURL(url), 60000);
+        } 
+        // Word, Excel: baixar automaticamente
+        else {
+            downloadFile(filePath, fileName);
         }
-
-        const blob = await response.blob();
-        const url = window.URL.createObjectURL(blob);
-        
-        window.open(url, '_blank');
-        
-        setTimeout(() => window.URL.revokeObjectURL(url), 60000);
         
     } catch (error) {
         console.error('Erro:', error);
