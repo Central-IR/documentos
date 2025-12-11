@@ -82,17 +82,18 @@ body {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    margin-bottom: 1.5rem;
+    margin-bottom: 2rem;
     flex-wrap: wrap;
     gap: 1rem;
 }
 
 h1 {
-    font-size: 1.3rem;
-    font-weight: 600;
+    font-size: 1.75rem;
+    font-weight: 700;
     display: flex;
     align-items: center;
     gap: 12px;
+    letter-spacing: -0.02em;
 }
 
 /* STATUS */
@@ -100,18 +101,19 @@ h1 {
     display: flex;
     align-items: center;
     gap: 0.5rem;
-    padding: 0.4rem 0.9rem;
-    border-radius: 6px;
-    font-size: 0.8rem;
-    font-weight: 500;
+    padding: 0;
+    border-radius: 0;
+    font-size: 0.75rem;
+    font-weight: 600;
     text-transform: uppercase;
     background: transparent;
-    border: 1px solid var(--border-color);
+    border: none;
+    letter-spacing: 0.05em;
 }
 
 .status-dot {
-    width: 8px;
-    height: 8px;
+    width: 10px;
+    height: 10px;
     border-radius: 50%;
 }
 
@@ -136,27 +138,25 @@ h1 {
 
 .back-btn {
     background: transparent;
-    border: 1px solid var(--border-color);
+    border: none;
     color: var(--text-primary);
-    font-size: 1.2rem;
+    font-size: 1.4rem;
     cursor: pointer;
-    padding: 0.4rem 0.8rem;
-    border-radius: 6px;
-    transition: all 0.2s;
+    padding: 0.3rem;
+    border-radius: 4px;
+    transition: opacity 0.2s;
     line-height: 1;
     min-width: auto;
-    font-weight: normal;
+    font-weight: 300;
 }
 
 .back-btn:hover:not(:disabled) {
-    background: var(--input-bg);
-    border-color: var(--primary);
+    opacity: 0.6;
 }
 
 .back-btn:disabled {
     opacity: 0.2;
     cursor: not-allowed;
-    border-color: var(--border-color);
 }
 
 /* BREADCRUMB - MINIMALISTA */
@@ -373,7 +373,7 @@ button.secondary { background: #4B5563; }
 }
 
 .floating-btn-upload { 
-    bottom: 7rem;
+    bottom: 5.5rem;
     background: #00aa55;
 }
 
