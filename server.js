@@ -32,21 +32,6 @@ const upload = multer({
     storage: multer.memoryStorage(),
     limits: {
         fileSize: 50 * 1024 * 1024 // 50MB
-    },
-    fileFilter: (req, file, cb) => {
-        const allowedTypes = [
-            'application/pdf',
-            'application/msword',
-            'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-            'text/xml',
-            'application/xml'
-        ];
-        
-        if (allowedTypes.includes(file.mimetype)) {
-            cb(null, true);
-        } else {
-            cb(new Error('Tipo de arquivo não permitido. Use PDF, Word ou XML.'));
-        }
     }
 });
 
@@ -143,23 +128,19 @@ async function verificarAutenticacao(req, res, next) {
 // ======== FUNÇÕES AUXILIARES ==============
 // ==========================================
 
-// Normalizar caminho (sempre começar com Documentos/)
 function normalizePath(inputPath) {
     if (!inputPath || inputPath === '/') return 'Documentos/';
     
     let normalized = inputPath.trim();
     
-    // Remover barra inicial se existir
     if (normalized.startsWith('/')) {
         normalized = normalized.substring(1);
     }
     
-    // Garantir que começa com Documentos/
     if (!normalized.startsWith('Documentos/')) {
         normalized = 'Documentos/' + normalized;
     }
     
-    // Garantir que termina com / para pastas
     if (!normalized.endsWith('/')) {
         normalized += '/';
     }
@@ -167,7 +148,6 @@ function normalizePath(inputPath) {
     return normalized;
 }
 
-// Listar conteúdo de uma pasta
 async function listarConteudoPasta(caminho) {
     try {
         const { data, error } = await supabase.storage
@@ -178,7 +158,6 @@ async function listarConteudoPasta(caminho) {
             });
 
         if (error) throw error;
-
         return data || [];
     } catch (error) {
         console.error('Erro ao listar pasta:', error);
@@ -211,7 +190,6 @@ app.use(express.static(publicPath, {
 // ==========================================
 app.get('/health', async (req, res) => {
     try {
-        // Testar conexão com storage
         const { data, error } = await supabase.storage.listBuckets();
         
         res.json({
@@ -236,6 +214,75 @@ app.get('/health', async (req, res) => {
 
 app.use('/api', verificarAutenticacao);
 
+// Busca global (recursiva em todas as pastas)
+app.get('/api/search', async (req, res) => {
+    try {
+        const searchTerm = req.query.q?.toLowerCase() || '';
+        
+        if (!searchTerm || searchTerm.length < 2) {
+            return res.json({ results: [] });
+        }
+
+        console.log('🔍 Buscando:', searchTerm);
+
+        // Função recursiva para buscar em todas as pastas
+        async function searchInFolder(folderPath) {
+            const items = await listarConteudoPasta(folderPath);
+            let results = [];
+
+            for (const item of items) {
+                const fullPath = folderPath + item.name;
+                
+                // Verifica se o nome do item contém o termo de busca
+                if (item.name.toLowerCase().includes(searchTerm)) {
+                    if (item.id) {
+                        // É um arquivo
+                        results.push({
+                            name: item.name,
+                            type: 'file',
+                            path: fullPath,
+                            size: item.metadata?.size || 0,
+                            mimetype: item.metadata?.mimetype || 'application/octet-stream',
+                            folder: folderPath,
+                            created_at: item.created_at,
+                            updated_at: item.updated_at
+                        });
+                    } else {
+                        // É uma pasta
+                        results.push({
+                            name: item.name,
+                            type: 'folder',
+                            path: fullPath + '/',
+                            folder: folderPath,
+                            created_at: item.created_at,
+                            updated_at: item.updated_at
+                        });
+                    }
+                }
+
+                // Se for pasta, buscar dentro dela também (recursivo)
+                if (!item.id) {
+                    const subResults = await searchInFolder(fullPath + '/');
+                    results = results.concat(subResults);
+                }
+            }
+
+            return results;
+        }
+
+        const results = await searchInFolder('Documentos/');
+        
+        console.log(`✅ ${results.length} resultados encontrados`);
+        res.json({ results });
+    } catch (error) {
+        console.error('❌ Erro na busca:', error);
+        res.status(500).json({ 
+            error: 'Erro ao buscar', 
+            details: error.message 
+        });
+    }
+});
+
 // Listar conteúdo de uma pasta
 app.get('/api/folders', async (req, res) => {
     try {
@@ -244,7 +291,6 @@ app.get('/api/folders', async (req, res) => {
 
         const items = await listarConteudoPasta(caminho);
 
-        // Separar pastas e arquivos
         const pastas = items.filter(item => !item.id).map(item => ({
             name: item.name,
             type: 'folder',
@@ -293,7 +339,6 @@ app.post('/api/folders', async (req, res) => {
 
         console.log('📁 Criando pasta:', newFolderPath);
 
-        // Criar arquivo .keep para forçar criação da pasta
         const { error } = await supabase.storage
             .from(bucketName)
             .upload(newFolderPath + '.keep', new Blob([''], { type: 'text/plain' }), {
@@ -413,7 +458,6 @@ app.delete('/api/delete', async (req, res) => {
         console.log('🗑️ Deletando:', itemPath, '(Tipo:', type, ')');
 
         if (type === 'folder') {
-            // Listar todos os arquivos na pasta
             const items = await listarConteudoPasta(itemPath);
             const allFiles = items.map(item => itemPath + item.name);
             
@@ -425,7 +469,6 @@ app.delete('/api/delete', async (req, res) => {
                 if (error) throw error;
             }
         } else {
-            // Deletar arquivo único
             const { error } = await supabase.storage
                 .from(bucketName)
                 .remove([itemPath]);
@@ -458,7 +501,6 @@ app.put('/api/rename', async (req, res) => {
         console.log('✏️ Renomeando:', oldPath, '→', newPath);
 
         if (type === 'folder') {
-            // Renomear pasta: mover todos os arquivos
             const items = await listarConteudoPasta(oldPath);
             
             for (const item of items) {
@@ -472,7 +514,6 @@ app.put('/api/rename', async (req, res) => {
                 if (moveError) throw moveError;
             }
         } else {
-            // Renomear arquivo
             const { error } = await supabase.storage
                 .from(bucketName)
                 .move(oldPath, newPath);
@@ -488,57 +529,6 @@ app.put('/api/rename', async (req, res) => {
         console.error('❌ Erro ao renomear:', error);
         res.status(500).json({ 
             error: 'Erro ao renomear item', 
-            details: error.message 
-        });
-    }
-});
-
-// Mover arquivo ou pasta
-app.put('/api/move', async (req, res) => {
-    try {
-        const { sourcePath, targetPath, type } = req.body;
-        
-        if (!sourcePath || !targetPath) {
-            return res.status(400).json({ error: 'Caminhos de origem e destino são obrigatórios' });
-        }
-
-        const fileName = sourcePath.split('/').filter(Boolean).pop();
-        const normalizedTarget = normalizePath(targetPath);
-        const newPath = normalizedTarget + fileName + (type === 'folder' ? '/' : '');
-
-        console.log('📦 Movendo:', sourcePath, '→', newPath);
-
-        if (type === 'folder') {
-            // Mover pasta: mover todos os arquivos
-            const items = await listarConteudoPasta(sourcePath);
-            
-            for (const item of items) {
-                const oldFilePath = sourcePath + item.name;
-                const newFilePath = newPath + item.name;
-                
-                const { error: moveError } = await supabase.storage
-                    .from(bucketName)
-                    .move(oldFilePath, newFilePath);
-
-                if (moveError) throw moveError;
-            }
-        } else {
-            // Mover arquivo
-            const { error } = await supabase.storage
-                .from(bucketName)
-                .move(sourcePath, newPath);
-
-            if (error) throw error;
-        }
-
-        res.json({ 
-            message: 'Item movido com sucesso',
-            newPath: newPath
-        });
-    } catch (error) {
-        console.error('❌ Erro ao mover:', error);
-        res.status(500).json({ 
-            error: 'Erro ao mover item', 
             details: error.message 
         });
     }
@@ -585,12 +575,11 @@ app.listen(PORT, '0.0.0.0', () => {
     console.log(`📦 Storage: Supabase`);
     console.log(`🪣 Bucket: ${bucketName}`);
     console.log(`🔗 Supabase URL: ${supabaseUrl}`);
-    console.log(`🔐 Autenticação: Ativa ✅`);
+    console.log(`🔐 Autenticação: Portal ✅`);
     console.log(`🌐 Portal URL: ${PORTAL_URL}`);
     console.log('🚀 ================================\n');
 });
 
-// Verificar se pasta public existe
 if (!fs.existsSync(publicPath)) {
     console.error('⚠️ AVISO: Pasta public/ não encontrada!');
 }
