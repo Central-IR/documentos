@@ -64,6 +64,7 @@ async function checkServerStatus() {
             method: 'GET',
             headers: { 
                 'X-Session-Token': sessionToken,
+                'X-Session-Token': sessionToken,
                 'Accept': 'application/json'
             }
         });
@@ -161,8 +162,10 @@ async function loadCurrentFolder() {
     try {
         const response = await fetch(`${API_URL}/folders?path=${encodeURIComponent(currentPath)}`, {
             method: 'GET',
+            
             headers: { 
                 'X-Session-Token': sessionToken,
+                
                 'Accept': 'application/json'
             }
         });
@@ -217,18 +220,18 @@ function renderItems(items) {
         
         if (item.type === 'folder') {
             itemDiv.innerHTML = `
-                <div class="item-icon" onclick="navigateTo('${item.path}')">📁</div>
+                <div class="item-icon">📁</div>
                 <div class="item-name">${item.name}</div>
             `;
             
-            // Adicionar evento de clique para abrir pasta
+            // Clique simples abre a pasta
             itemDiv.addEventListener('click', (e) => {
-                if (e.button === 0) { // Clique esquerdo
+                if (e.button === 0) {
                     navigateTo(item.path);
                 }
             });
             
-            // Adicionar menu de contexto
+            // Menu de contexto (clique direito)
             itemDiv.addEventListener('contextmenu', (e) => {
                 e.preventDefault();
                 showContextMenu(e, item.path, item.name, 'folder');
@@ -244,14 +247,42 @@ function renderItems(items) {
                 <div class="item-info">${fileExtension} • ${fileSize}</div>
             `;
             
-            // Adicionar evento de clique para abrir arquivo
+            // Tornar arquivo "arrastável"
+            itemDiv.draggable = true;
+            itemDiv.dataset.filepath = item.path;
+            itemDiv.dataset.filename = item.name;
+            
+            // Drag start - preparar dados para arrastar
+            itemDiv.addEventListener('dragstart', async (e) => {
+                e.dataTransfer.effectAllowed = 'copy';
+                
+                // Obter o arquivo do servidor
+                try {
+                    const response = await fetch(`${API_URL}/download?path=${encodeURIComponent(item.path)}`, {
+                        headers: { 'X-Session-Token': sessionToken }
+                    });
+                    
+                    if (response.ok) {
+                        const blob = await response.blob();
+                        const file = new File([blob], item.name, { type: blob.type });
+                        
+                        // Adicionar arquivo aos dados de transferência
+                        e.dataTransfer.items.add(file);
+                        e.dataTransfer.setData('text/plain', item.name);
+                    }
+                } catch (error) {
+                    console.error('Erro ao preparar arquivo:', error);
+                }
+            });
+            
+            // Clique simples abre o arquivo em nova aba
             itemDiv.addEventListener('click', (e) => {
-                if (e.button === 0) { // Clique esquerdo
+                if (e.button === 0) {
                     viewFile(item.path, item.name);
                 }
             });
             
-            // Adicionar menu de contexto
+            // Menu de contexto (clique direito)
             itemDiv.addEventListener('contextmenu', (e) => {
                 e.preventDefault();
                 showContextMenu(e, item.path, item.name, 'file');
@@ -284,21 +315,142 @@ function formatFileSize(bytes) {
 }
 
 // ============================================
-// FILTRAR ITENS
+// FILTRAR ITENS (BUSCA GLOBAL)
 // ============================================
-function filterItems() {
+let searchTimeout;
+
+async function filterItems() {
     const searchTerm = document.getElementById('search')?.value.toLowerCase() || '';
     
+    // Limpar timeout anterior
+    if (searchTimeout) {
+        clearTimeout(searchTimeout);
+    }
+    
+    // Se vazio, mostrar pasta atual
     if (!searchTerm) {
         renderItems(allItems);
         return;
     }
 
-    const filtered = allItems.filter(item => 
+    // Busca local primeiro (mais rápido)
+    const localFiltered = allItems.filter(item => 
         item.name.toLowerCase().includes(searchTerm)
     );
+    
+    renderItems(localFiltered);
 
-    renderItems(filtered);
+    // Se busca tiver 2+ caracteres, fazer busca global no servidor
+    if (searchTerm.length >= 2) {
+        searchTimeout = setTimeout(async () => {
+            try {
+                const response = await fetch(`${API_URL}/search?q=${encodeURIComponent(searchTerm)}`, {
+                    headers: { 
+                        'X-Session-Token': sessionToken,
+                        'Accept': 'application/json'
+                    }
+                });
+
+                if (response.ok) {
+                    const data = await response.json();
+                    
+                    if (data.results && data.results.length > 0) {
+                        // Adicionar informação da pasta onde está
+                        const resultsWithPath = data.results.map(item => ({
+                            ...item,
+                            displayPath: item.folder.replace('Documentos/', '')
+                        }));
+                        
+                        renderSearchResults(resultsWithPath);
+                    }
+                }
+            } catch (error) {
+                console.error('Erro na busca global:', error);
+            }
+        }, 500); // Delay de 500ms
+    }
+}
+
+// Renderizar resultados de busca com caminho
+function renderSearchResults(results) {
+    const container = document.getElementById('filesContainer');
+    
+    if (!results || results.length === 0) {
+        container.innerHTML = `
+            <div class="empty-state">
+                <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path>
+                </svg>
+                <p>Nenhum resultado encontrado</p>
+            </div>
+        `;
+        return;
+    }
+
+    const grid = document.createElement('div');
+    grid.className = 'files-grid';
+
+    results.forEach(item => {
+        const itemDiv = document.createElement('div');
+        itemDiv.className = item.type === 'folder' ? 'folder-item' : 'file-item';
+        
+        if (item.type === 'folder') {
+            itemDiv.innerHTML = `
+                <div class="item-icon">📁</div>
+                <div class="item-name">${item.name}</div>
+                <div class="item-info" style="font-size: 0.7rem; color: var(--text-secondary);">📂 ${item.displayPath || '/'}</div>
+            `;
+            
+            itemDiv.addEventListener('click', () => navigateTo(item.path));
+            itemDiv.addEventListener('contextmenu', (e) => {
+                e.preventDefault();
+                showContextMenu(e, item.path, item.name, 'folder');
+            });
+        } else {
+            const fileExtension = item.name.split('.').pop().toUpperCase();
+            const fileIcon = getFileIcon(fileExtension);
+            const fileSize = formatFileSize(item.size);
+            
+            itemDiv.innerHTML = `
+                <div class="item-icon">${fileIcon}</div>
+                <div class="item-name">${item.name}</div>
+                <div class="item-info">${fileExtension} • ${fileSize}</div>
+                <div class="item-info" style="font-size: 0.65rem; color: var(--text-secondary);">📂 ${item.displayPath || '/'}</div>
+            `;
+            
+            itemDiv.draggable = true;
+            itemDiv.dataset.filepath = item.path;
+            itemDiv.dataset.filename = item.name;
+            
+            itemDiv.addEventListener('dragstart', async (e) => {
+                e.dataTransfer.effectAllowed = 'copy';
+                try {
+                    const response = await fetch(`${API_URL}/download?path=${encodeURIComponent(item.path)}`, {
+                        headers: { 'X-Session-Token': sessionToken }
+                    });
+                    if (response.ok) {
+                        const blob = await response.blob();
+                        const file = new File([blob], item.name, { type: blob.type });
+                        e.dataTransfer.items.add(file);
+                        e.dataTransfer.setData('text/plain', item.name);
+                    }
+                } catch (error) {
+                    console.error('Erro:', error);
+                }
+            });
+            
+            itemDiv.addEventListener('click', () => viewFile(item.path, item.name));
+            itemDiv.addEventListener('contextmenu', (e) => {
+                e.preventDefault();
+                showContextMenu(e, item.path, item.name, 'file');
+            });
+        }
+        
+        grid.appendChild(itemDiv);
+    });
+
+    container.innerHTML = '';
+    container.appendChild(grid);
 }
 
 // ============================================
@@ -341,9 +493,11 @@ async function createFolder(event) {
     try {
         const response = await fetch(`${API_URL}/folders`, {
             method: 'POST',
+            
             headers: {
+                'X-Session-Token': sessionToken,
                 'Content-Type': 'application/json',
-                'X-Session-Token': sessionToken
+                
             },
             body: JSON.stringify({
                 path: currentPath,
@@ -390,8 +544,10 @@ async function uploadFile(file) {
 
         const response = await fetch(`${API_URL}/upload`, {
             method: 'POST',
+            
             headers: {
-                'X-Session-Token': sessionToken
+                'X-Session-Token': sessionToken,
+                
             },
             body: formData
         });
@@ -547,8 +703,10 @@ window.viewFile = async function(filePath, fileName) {
     try {
         const response = await fetch(`${API_URL}/download?path=${encodeURIComponent(filePath)}`, {
             method: 'GET',
+            
             headers: {
-                'X-Session-Token': sessionToken
+                'X-Session-Token': sessionToken,
+                
             }
         });
 
@@ -582,8 +740,10 @@ window.downloadFile = async function(filePath, fileName) {
 
         const response = await fetch(`${API_URL}/download?path=${encodeURIComponent(filePath)}`, {
             method: 'GET',
+            
             headers: {
-                'X-Session-Token': sessionToken
+                'X-Session-Token': sessionToken,
+                
             }
         });
 
@@ -661,9 +821,11 @@ async function renameItem(event, oldPath, type) {
     try {
         const response = await fetch(`${API_URL}/rename`, {
             method: 'PUT',
+            
             headers: {
+                'X-Session-Token': sessionToken,
                 'Content-Type': 'application/json',
-                'X-Session-Token': sessionToken
+                
             },
             body: JSON.stringify({
                 oldPath: oldPath,
@@ -706,8 +868,10 @@ window.deleteItem = async function(itemPath, type) {
     try {
         const response = await fetch(`${API_URL}/delete?path=${encodeURIComponent(itemPath)}&type=${type}`, {
             method: 'DELETE',
+            
             headers: {
-                'X-Session-Token': sessionToken
+                'X-Session-Token': sessionToken,
+                
             }
         });
 
