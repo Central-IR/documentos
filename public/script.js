@@ -219,12 +219,20 @@ function renderItems(items) {
             itemDiv.innerHTML = `
                 <div class="item-icon" onclick="navigateTo('${item.path}')">📁</div>
                 <div class="item-name">${item.name}</div>
-                <div class="item-actions">
-                    <button class="view small" onclick="navigateTo('${item.path}')">Abrir</button>
-                    <button class="edit small" onclick="showRenameModal('${item.path}', '${item.name}', 'folder')">Renomear</button>
-                    <button class="delete small" onclick="deleteItem('${item.path}', 'folder')">Excluir</button>
-                </div>
             `;
+            
+            // Adicionar evento de clique para abrir pasta
+            itemDiv.addEventListener('click', (e) => {
+                if (e.button === 0) { // Clique esquerdo
+                    navigateTo(item.path);
+                }
+            });
+            
+            // Adicionar menu de contexto
+            itemDiv.addEventListener('contextmenu', (e) => {
+                e.preventDefault();
+                showContextMenu(e, item.path, item.name, 'folder');
+            });
         } else {
             const fileExtension = item.name.split('.').pop().toUpperCase();
             const fileIcon = getFileIcon(fileExtension);
@@ -234,12 +242,20 @@ function renderItems(items) {
                 <div class="item-icon">${fileIcon}</div>
                 <div class="item-name">${item.name}</div>
                 <div class="item-info">${fileExtension} • ${fileSize}</div>
-                <div class="item-actions">
-                    <button class="view small" onclick="downloadFile('${item.path}', '${item.name}')">Baixar</button>
-                    <button class="edit small" onclick="showRenameModal('${item.path}', '${item.name}', 'file')">Renomear</button>
-                    <button class="delete small" onclick="deleteItem('${item.path}', 'file')">Excluir</button>
-                </div>
             `;
+            
+            // Adicionar evento de clique para abrir arquivo
+            itemDiv.addEventListener('click', (e) => {
+                if (e.button === 0) { // Clique esquerdo
+                    viewFile(item.path, item.name);
+                }
+            });
+            
+            // Adicionar menu de contexto
+            itemDiv.addEventListener('contextmenu', (e) => {
+                e.preventDefault();
+                showContextMenu(e, item.path, item.name, 'file');
+            });
         }
         
         grid.appendChild(itemDiv);
@@ -448,9 +464,119 @@ function setupDragAndDrop() {
 }
 
 // ============================================
+// MENU DE CONTEXTO (CLIQUE DIREITO)
+// ============================================
+function showContextMenu(event, itemPath, itemName, type) {
+    // Remover menu anterior se existir
+    const oldMenu = document.getElementById('contextMenu');
+    if (oldMenu) oldMenu.remove();
+
+    const menu = document.createElement('div');
+    menu.id = 'contextMenu';
+    menu.className = 'context-menu';
+    
+    if (type === 'folder') {
+        menu.innerHTML = `
+            <div class="context-menu-item" onclick="navigateTo('${itemPath}')">
+                <span>📂</span> Abrir
+            </div>
+            <div class="context-menu-divider"></div>
+            <div class="context-menu-item" onclick="showRenameModal('${itemPath}', '${itemName}', 'folder')">
+                <span>✏️</span> Renomear
+            </div>
+            <div class="context-menu-item danger" onclick="deleteItem('${itemPath}', 'folder')">
+                <span>🗑️</span> Excluir
+            </div>
+        `;
+    } else {
+        menu.innerHTML = `
+            <div class="context-menu-item" onclick="viewFile('${itemPath}', '${itemName}')">
+                <span>👁️</span> Visualizar
+            </div>
+            <div class="context-menu-item" onclick="downloadFile('${itemPath}', '${itemName}')">
+                <span>⬇️</span> Baixar
+            </div>
+            <div class="context-menu-divider"></div>
+            <div class="context-menu-item" onclick="showRenameModal('${itemPath}', '${itemName}', 'file')">
+                <span>✏️</span> Renomear
+            </div>
+            <div class="context-menu-item danger" onclick="deleteItem('${itemPath}', 'file')">
+                <span>🗑️</span> Excluir
+            </div>
+        `;
+    }
+
+    document.body.appendChild(menu);
+
+    // Posicionar menu
+    const x = event.clientX;
+    const y = event.clientY;
+    const menuWidth = 200;
+    const menuHeight = menu.offsetHeight;
+    const windowWidth = window.innerWidth;
+    const windowHeight = window.innerHeight;
+
+    // Ajustar posição se sair da tela
+    const posX = (x + menuWidth > windowWidth) ? windowWidth - menuWidth - 10 : x;
+    const posY = (y + menuHeight > windowHeight) ? windowHeight - menuHeight - 10 : y;
+
+    menu.style.left = posX + 'px';
+    menu.style.top = posY + 'px';
+    menu.style.display = 'block';
+
+    // Fechar menu ao clicar fora
+    setTimeout(() => {
+        document.addEventListener('click', closeContextMenu);
+    }, 10);
+}
+
+function closeContextMenu() {
+    const menu = document.getElementById('contextMenu');
+    if (menu) {
+        menu.remove();
+        document.removeEventListener('click', closeContextMenu);
+    }
+}
+
+// ============================================
+// VISUALIZAR ARQUIVO
+// ============================================
+window.viewFile = async function(filePath, fileName) {
+    closeContextMenu();
+    
+    try {
+        const response = await fetch(`${API_URL}/download?path=${encodeURIComponent(filePath)}`, {
+            method: 'GET',
+            headers: {
+                'X-Session-Token': sessionToken
+            }
+        });
+
+        if (!response.ok) {
+            throw new Error('Erro ao visualizar arquivo');
+        }
+
+        const blob = await response.blob();
+        const url = window.URL.createObjectURL(blob);
+        
+        // Abrir em nova aba
+        window.open(url, '_blank');
+        
+        // Liberar URL após um tempo
+        setTimeout(() => window.URL.revokeObjectURL(url), 60000);
+        
+    } catch (error) {
+        console.error('Erro:', error);
+        showMessage('Erro ao visualizar arquivo', 'error');
+    }
+};
+
+// ============================================
 // DOWNLOAD DE ARQUIVO
 // ============================================
 window.downloadFile = async function(filePath, fileName) {
+    closeContextMenu();
+    
     try {
         showMessage('Baixando arquivo...', 'success');
 
@@ -486,6 +612,8 @@ window.downloadFile = async function(filePath, fileName) {
 // RENOMEAR
 // ============================================
 window.showRenameModal = function(itemPath, currentName, type) {
+    closeContextMenu();
+    
     const modalHTML = `
         <div class="modal-overlay" id="renameModal">
             <div class="modal-content">
@@ -561,6 +689,8 @@ async function renameItem(event, oldPath, type) {
 // DELETAR
 // ============================================
 window.deleteItem = async function(itemPath, type) {
+    closeContextMenu();
+    
     const confirmed = await showConfirm(
         `Tem certeza que deseja excluir este ${type === 'folder' ? 'pasta e todo seu conteúdo' : 'arquivo'}?`,
         {
