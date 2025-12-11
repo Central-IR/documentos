@@ -431,9 +431,33 @@ app.get('/api/download', async (req, res) => {
         if (error) throw error;
 
         const fileName = filePath.split('/').pop();
+        const fileExtension = fileName.split('.').pop().toLowerCase();
         
-        res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
-        res.setHeader('Content-Type', 'application/octet-stream');
+        // Detectar Content-Type correto
+        const contentTypes = {
+            'pdf': 'application/pdf',
+            'xml': 'text/xml',
+            'txt': 'text/plain',
+            'doc': 'application/msword',
+            'docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            'xls': 'application/vnd.ms-excel',
+            'xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            'jpg': 'image/jpeg',
+            'jpeg': 'image/jpeg',
+            'png': 'image/png',
+            'gif': 'image/gif'
+        };
+        
+        const contentType = contentTypes[fileExtension] || 'application/octet-stream';
+        
+        // Para PDFs e XMLs: inline (abre no navegador)
+        // Para outros: attachment (baixa)
+        const disposition = ['pdf', 'xml', 'txt', 'jpg', 'jpeg', 'png', 'gif'].includes(fileExtension)
+            ? `inline; filename="${encodeURIComponent(fileName)}"`
+            : `attachment; filename="${encodeURIComponent(fileName)}"`;
+        
+        res.setHeader('Content-Disposition', disposition);
+        res.setHeader('Content-Type', contentType);
         
         const buffer = Buffer.from(await data.arrayBuffer());
         res.send(buffer);
