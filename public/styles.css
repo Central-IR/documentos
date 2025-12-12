@@ -387,7 +387,7 @@ button.secondary { background: #4B5563; }
 }
 
 .floating-btn-upload { 
-    bottom: 5.5rem;
+    bottom: 4.5rem;  /* MAIS PRÓXIMO - era 5.5rem */
     background: #00aa55;
 }
 
