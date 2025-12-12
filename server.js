@@ -1,4 +1,4 @@
-// server.js - Sistema Híbrido Google Drive + Supabase
+// server.js - Sistema Híbrido Google Drive + Supabase OTIMIZADO
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
@@ -10,6 +10,9 @@ const path = require('path');
 const GoogleAuth = require('./google-auth');
 const GoogleDriveClient = require('./google-drive-client');
 const SyncManager = require('./sync-manager');
+const RealtimeSync = require('./realtime-sync');
+const DownloadOptimizer = require('./download-optimizer');
+const ZipManager = require('./zip-manager');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -32,26 +35,20 @@ if (!supabaseUrl || !supabaseKey) {
 
 if (!googleClientId || !googleClientSecret || !googleRedirectUri) {
     console.error('❌ ERRO: Google Drive não configurado');
-    console.error('Configure as variáveis no .env:');
-    console.error('  GOOGLE_CLIENT_ID');
-    console.error('  GOOGLE_CLIENT_SECRET');
-    console.error('  GOOGLE_REDIRECT_URI');
     process.exit(1);
 }
 
 const supabase = createClient(supabaseUrl, supabaseKey);
 console.log('✅ Supabase configurado');
 
-// Inicializar Google Drive
-const googleAuth = new GoogleAuth(
-    googleClientId,
-    googleClientSecret,
-    googleRedirectUri,
-    supabase
-);
+// Inicializar módulos
+const googleAuth = new GoogleAuth(googleClientId, googleClientSecret, googleRedirectUri, supabase);
 
 let driveClient = null;
 let syncManager = null;
+let realtimeSync = null;
+let downloadOptimizer = new DownloadOptimizer();
+let zipManager = null;
 
 // ==========================================
 // MIDDLEWARE
@@ -75,7 +72,7 @@ app.use((req, res, next) => {
 // AUTENTICAÇÃO PORTAL
 // ==========================================
 async function verificarAutenticacao(req, res, next) {
-    const publicPaths = ['/', '/health', '/app', '/auth/google', '/auth/google/callback', '/auth/google/status'];
+    const publicPaths = ['/', '/health', '/app', '/auth/google', '/auth/google/callback', '/auth/google/status', '/webhook/drive'];
     if (publicPaths.includes(req.path)) {
         return next();
     }
@@ -107,10 +104,23 @@ async function verificarAutenticacao(req, res, next) {
 }
 
 // ==========================================
+// WEBHOOK GOOGLE DRIVE (Sync em Tempo Real)
+// ==========================================
+app.post('/webhook/drive', express.raw({ type: 'application/json' }), async (req, res) => {
+    try {
+        if (realtimeSync) {
+            await realtimeSync.handleNotification(req.headers);
+        }
+        res.status(200).send('OK');
+    } catch (error) {
+        console.error('❌ Erro no webhook:', error);
+        res.status(200).send('OK'); // Sempre retornar 200 para Google
+    }
+});
+
+// ==========================================
 // ROTAS DE AUTENTICAÇÃO GOOGLE
 // ==========================================
-
-// Iniciar autenticação
 app.get('/auth/google', (req, res) => {
     try {
         const authUrl = googleAuth.getAuthUrl();
@@ -121,7 +131,6 @@ app.get('/auth/google', (req, res) => {
     }
 });
 
-// Callback
 app.get('/auth/google/callback', async (req, res) => {
     const { code } = req.query;
     
@@ -139,11 +148,21 @@ app.get('/auth/google/callback', async (req, res) => {
             process.env.GOOGLE_DRIVE_FOLDER_NAME || 'Documentos'
         );
         
+        await driveClient.initRootFolder();
+        
         syncManager = new SyncManager(driveClient, supabase);
         syncManager.startAutoSync(parseInt(process.env.SYNC_INTERVAL_MS) || 300000);
         
+        // Inicializar otimizadores
+        zipManager = new ZipManager(driveClient);
+        
+        // Configurar sync em tempo real
+        const webhookUrl = process.env.WEBHOOK_URL || `${googleRedirectUri.split('/auth')[0]}/webhook/drive`;
+        realtimeSync = new RealtimeSync(driveClient, supabase, syncManager);
+        await realtimeSync.setupPushNotifications(webhookUrl);
+        
         console.log('✅ Autenticação concluída!');
-        console.log('✅ Sincronização automática iniciada!');
+        console.log('✅ Sincronização em tempo real ativada!');
         
         res.send(`
             <!DOCTYPE html>
@@ -173,6 +192,10 @@ app.get('/auth/google/callback', async (req, res) => {
                         color: #A0A0A0;
                         margin-bottom: 2rem;
                     }
+                    .feature {
+                        color: #00cc77;
+                        margin: 0.5rem 0;
+                    }
                     a {
                         background: #0077c7;
                         color: white;
@@ -180,13 +203,18 @@ app.get('/auth/google/callback', async (req, res) => {
                         border-radius: 8px;
                         text-decoration: none;
                         font-weight: 600;
+                        display: inline-block;
+                        margin-top: 1rem;
                     }
                 </style>
             </head>
             <body>
                 <div class="container">
                     <h1>✅ Autenticação Concluída!</h1>
-                    <p>Google Drive conectado com sucesso!<br>Sincronização automática iniciada.</p>
+                    <p>Google Drive conectado com sucesso!</p>
+                    <div class="feature">⚡ Sincronização em tempo real ativada</div>
+                    <div class="feature">🚀 Downloads otimizados</div>
+                    <div class="feature">📦 ZIP de arquivos disponível</div>
                     <a href="/">Ir para Documentos</a>
                 </div>
             </body>
@@ -198,15 +226,20 @@ app.get('/auth/google/callback', async (req, res) => {
     }
 });
 
-// Status
 app.get('/auth/google/status', async (req, res) => {
     try {
         const isAuth = await googleAuth.isAuthenticated();
         const syncStatus = syncManager ? syncManager.getStatus() : null;
+        const realtimeStatus = realtimeSync ? {
+            enabled: true,
+            channelId: realtimeSync.channelId,
+            expiration: realtimeSync.expiration
+        } : { enabled: false };
         
         res.json({
             authenticated: isAuth,
-            sync: syncStatus
+            sync: syncStatus,
+            realtime: realtimeStatus
         });
     } catch (error) {
         res.json({
@@ -228,7 +261,8 @@ app.get('/health', async (req, res) => {
             status: 'healthy',
             google_drive: googleAuth ? 'connected' : 'disconnected',
             supabase: 'connected',
-            sync: syncStatus
+            sync: syncStatus,
+            realtime: realtimeSync ? 'enabled' : 'disabled'
         });
     } catch (error) {
         res.json({
@@ -243,7 +277,7 @@ app.get('/health', async (req, res) => {
 // ==========================================
 app.use('/api', verificarAutenticacao);
 
-// Listar pasta
+// Listar pasta (COM LINKS OTIMIZADOS)
 app.get('/api/folders', async (req, res) => {
     try {
         const folderPath = req.query.path || 'Documentos/';
@@ -258,7 +292,10 @@ app.get('/api/folders', async (req, res) => {
         
         if (error) throw error;
         
-        const folders = data.filter(item => item.is_folder).map(item => ({
+        // Otimizar links
+        const optimizedData = downloadOptimizer.generateOptimizedLinks(data);
+        
+        const folders = optimizedData.filter(item => item.is_folder).map(item => ({
             name: item.name,
             type: 'folder',
             path: item.folder_path + item.name + '/',
@@ -266,7 +303,7 @@ app.get('/api/folders', async (req, res) => {
             updated_at: item.google_modified_at
         }));
         
-        const files = data.filter(item => !item.is_folder).map(item => ({
+        const files = optimizedData.filter(item => !item.is_folder).map(item => ({
             name: item.name,
             type: 'file',
             path: item.folder_path + item.name,
@@ -274,7 +311,10 @@ app.get('/api/folders', async (req, res) => {
             mimetype: item.mimetype,
             created_at: item.google_created_at,
             updated_at: item.google_modified_at,
-            google_drive_id: item.google_drive_id
+            google_drive_id: item.google_drive_id,
+            directDownloadLink: item.directDownloadLink,
+            previewLink: item.previewLink,
+            thumbnailLink: item.thumbnailLink
         }));
         
         res.json({
@@ -308,7 +348,9 @@ app.get('/api/search', async (req, res) => {
         
         if (error) throw error;
         
-        const results = data.map(item => ({
+        const optimizedData = downloadOptimizer.generateOptimizedLinks(data);
+        
+        const results = optimizedData.map(item => ({
             name: item.name,
             type: item.is_folder ? 'folder' : 'file',
             path: item.folder_path + item.name + (item.is_folder ? '/' : ''),
@@ -316,7 +358,10 @@ app.get('/api/search', async (req, res) => {
             size: item.size,
             mimetype: item.mimetype,
             created_at: item.google_created_at,
-            updated_at: item.google_modified_at
+            updated_at: item.google_modified_at,
+            google_drive_id: item.google_drive_id,
+            directDownloadLink: item.directDownloadLink,
+            previewLink: item.previewLink
         }));
         
         res.json({ results });
@@ -393,7 +438,7 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
     }
 });
 
-// Download
+// Download OTIMIZADO (redirect para link direto)
 app.get('/api/download', async (req, res) => {
     try {
         const filePath = req.query.path;
@@ -413,16 +458,10 @@ app.get('/api/download', async (req, res) => {
             return res.status(404).json({ error: 'Arquivo não encontrado' });
         }
         
-        const stream = await driveClient.downloadFile(fileInfo.google_drive_id);
+        // OTIMIZAÇÃO: Redirecionar para link direto do Google Drive
+        const directLink = downloadOptimizer.getDirectDownloadLink(fileInfo.google_drive_id);
+        res.redirect(directLink);
         
-        const fileName = fileInfo.name;
-        const ext = fileName.split('.').pop().toLowerCase();
-        const inline = ['pdf', 'xml', 'txt', 'jpg', 'jpeg', 'png'].includes(ext);
-        
-        res.setHeader('Content-Disposition', `${inline ? 'inline' : 'attachment'}; filename="${fileName}"`);
-        res.setHeader('Content-Type', fileInfo.mimetype || 'application/octet-stream');
-        
-        stream.pipe(res);
     } catch (error) {
         console.error('❌ Erro no download:', error);
         res.status(500).json({ error: 'Erro ao baixar arquivo' });
@@ -489,7 +528,7 @@ app.put('/api/rename', async (req, res) => {
     }
 });
 
-// Sincronizar
+// Sincronizar manualmente
 app.post('/api/sync', async (req, res) => {
     try {
         if (!syncManager) {
@@ -501,6 +540,56 @@ app.post('/api/sync', async (req, res) => {
     } catch (error) {
         console.error('❌ Erro na sincronização:', error);
         res.status(500).json({ error: 'Erro na sincronização' });
+    }
+});
+
+// ==========================================
+// ZIP DE ARQUIVOS
+// ==========================================
+
+// Criar ZIP de múltiplos arquivos
+app.post('/api/zip/files', express.json(), async (req, res) => {
+    try {
+        const { fileIds, zipName } = req.body;
+        
+        if (!fileIds || !Array.isArray(fileIds) || fileIds.length === 0) {
+            return res.status(400).json({ error: 'IDs de arquivos não fornecidos' });
+        }
+        
+        console.log(`📦 Criando ZIP com ${fileIds.length} arquivos...`);
+        
+        const zipBuffer = await zipManager.createZip(fileIds, zipName || 'arquivos.zip');
+        
+        res.setHeader('Content-Type', 'application/zip');
+        res.setHeader('Content-Disposition', `attachment; filename="${zipName || 'arquivos.zip'}"`);
+        res.send(zipBuffer);
+        
+    } catch (error) {
+        console.error('❌ Erro ao criar ZIP:', error);
+        res.status(500).json({ error: 'Erro ao criar ZIP' });
+    }
+});
+
+// Criar ZIP de uma pasta
+app.post('/api/zip/folder', express.json(), async (req, res) => {
+    try {
+        const { folderId, folderName } = req.body;
+        
+        if (!folderId) {
+            return res.status(400).json({ error: 'ID da pasta não fornecido' });
+        }
+        
+        console.log(`📦 Criando ZIP da pasta ${folderName}...`);
+        
+        const zipBuffer = await zipManager.createFolderZip(folderId, folderName);
+        
+        res.setHeader('Content-Type', 'application/zip');
+        res.setHeader('Content-Disposition', `attachment; filename="${folderName || 'pasta'}.zip"`);
+        res.send(zipBuffer);
+        
+    } catch (error) {
+        console.error('❌ Erro ao criar ZIP:', error);
+        res.status(500).json({ error: 'Erro ao criar ZIP da pasta' });
     }
 });
 
@@ -520,8 +609,11 @@ app.get('/app', (req, res) => {
 // ==========================================
 app.listen(PORT, '0.0.0.0', async () => {
     console.log('\n🚀 ================================');
-    console.log(`🚀 Servidor rodando na porta ${PORT}`);
+    console.log(`🚀 Servidor OTIMIZADO na porta ${PORT}`);
     console.log(`💾 Storage: Google Drive + Supabase`);
+    console.log(`⚡ Sincronização em tempo real`);
+    console.log(`🚀 Downloads otimizados`);
+    console.log(`📦 ZIP de arquivos disponível`);
     console.log(`🔗 Supabase: ${supabaseUrl}`);
     console.log(`🔐 Portal: ${portalUrl}`);
     
@@ -533,9 +625,20 @@ app.listen(PORT, '0.0.0.0', async () => {
                 googleAuth.getClient(),
                 process.env.GOOGLE_DRIVE_FOLDER_NAME || 'Documentos'
             );
+            await driveClient.initRootFolder();
+            
             syncManager = new SyncManager(driveClient, supabase);
             syncManager.startAutoSync(parseInt(process.env.SYNC_INTERVAL_MS) || 300000);
+            
+            zipManager = new ZipManager(driveClient);
+            
+            // Configurar sync em tempo real
+            const webhookUrl = process.env.WEBHOOK_URL || `${googleRedirectUri.split('/auth')[0]}/webhook/drive`;
+            realtimeSync = new RealtimeSync(driveClient, supabase, syncManager);
+            await realtimeSync.setupPushNotifications(webhookUrl);
+            
             console.log('✅ Sincronização automática iniciada');
+            console.log('✅ Sincronização em tempo real ativada');
         } else {
             console.log('⚠️  Google Drive: NÃO autenticado');
             console.log(`🔗 Autentique em: http://localhost:${PORT}/auth/google`);
