@@ -103,6 +103,18 @@ async function verificarAutenticacao(req, res, next) {
     }
 }
 
+// Adicionar ANTES das rotas /api
+function verificarGoogleDrive(req, res, next) {
+    if (!driveClient) {
+        return res.status(503).json({ 
+            error: 'Google Drive não conectado',
+            message: 'Faça login no Google Drive primeiro',
+            redirectTo: '/auth/google'
+        });
+    }
+    next();
+}
+
 // ==========================================
 // WEBHOOK GOOGLE DRIVE (Sync em Tempo Real)
 // ==========================================
@@ -278,7 +290,7 @@ app.get('/health', async (req, res) => {
 app.use('/api', verificarAutenticacao);
 
 // Listar pasta (COM LINKS OTIMIZADOS)
-app.get('/api/folders', async (req, res) => {
+app.post('/api/folders', verificarAutenticacao, verificarGoogleDrive, async (req, res) => {
     try {
         const folderPath = req.query.path || 'Documentos/';
         console.log('📂 Listando:', folderPath);
