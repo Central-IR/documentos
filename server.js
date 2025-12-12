@@ -1,4 +1,4 @@
-// server.js - Sistema Híbrido OneDrive + Supabase
+// server.js - Sistema Híbrido Google Drive + Supabase
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
@@ -6,9 +6,9 @@ const multer = require('multer');
 const { createClient } = require('@supabase/supabase-js');
 const path = require('path');
 
-// Módulos OneDrive
-const OneDriveAuth = require('./onedrive-auth');
-const OneDriveClient = require('./onedrive-client');
+// Módulos Google Drive
+const GoogleAuth = require('./google-auth');
+const GoogleDriveClient = require('./google-drive-client');
 const SyncManager = require('./sync-manager');
 
 const app = express();
@@ -21,36 +21,36 @@ const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const portalUrl = process.env.PORTAL_URL;
 
-const microsoftClientId = process.env.MICROSOFT_CLIENT_ID;
-const microsoftClientSecret = process.env.MICROSOFT_CLIENT_SECRET;
-const microsoftRedirectUri = process.env.MICROSOFT_REDIRECT_URI;
+const googleClientId = process.env.GOOGLE_CLIENT_ID;
+const googleClientSecret = process.env.GOOGLE_CLIENT_SECRET;
+const googleRedirectUri = process.env.GOOGLE_REDIRECT_URI;
 
 if (!supabaseUrl || !supabaseKey) {
     console.error('❌ ERRO: Supabase não configurado');
     process.exit(1);
 }
 
-if (!microsoftClientId || !microsoftClientSecret || !microsoftRedirectUri) {
-    console.error('❌ ERRO: Microsoft OneDrive não configurado');
+if (!googleClientId || !googleClientSecret || !googleRedirectUri) {
+    console.error('❌ ERRO: Google Drive não configurado');
     console.error('Configure as variáveis no .env:');
-    console.error('  MICROSOFT_CLIENT_ID');
-    console.error('  MICROSOFT_CLIENT_SECRET');
-    console.error('  MICROSOFT_REDIRECT_URI');
+    console.error('  GOOGLE_CLIENT_ID');
+    console.error('  GOOGLE_CLIENT_SECRET');
+    console.error('  GOOGLE_REDIRECT_URI');
     process.exit(1);
 }
 
 const supabase = createClient(supabaseUrl, supabaseKey);
 console.log('✅ Supabase configurado');
 
-// Inicializar OneDrive
-const onedriveAuth = new OneDriveAuth(
-    microsoftClientId,
-    microsoftClientSecret,
-    microsoftRedirectUri,
+// Inicializar Google Drive
+const googleAuth = new GoogleAuth(
+    googleClientId,
+    googleClientSecret,
+    googleRedirectUri,
     supabase
 );
 
-let onedriveClient = null;
+let driveClient = null;
 let syncManager = null;
 
 // ==========================================
@@ -63,10 +63,9 @@ app.use(express.static(path.join(__dirname, 'public')));
 
 const upload = multer({
     storage: multer.memoryStorage(),
-    limits: { fileSize: 50 * 1024 * 1024 } // 50MB
+    limits: { fileSize: 50 * 1024 * 1024 }
 });
 
-// Log
 app.use((req, res, next) => {
     console.log(`📥 ${req.method} ${req.path}`);
     next();
@@ -76,7 +75,7 @@ app.use((req, res, next) => {
 // AUTENTICAÇÃO PORTAL
 // ==========================================
 async function verificarAutenticacao(req, res, next) {
-    const publicPaths = ['/', '/health', '/app', '/auth/onedrive', '/auth/onedrive/callback', '/auth/onedrive/status'];
+    const publicPaths = ['/', '/health', '/app', '/auth/google', '/auth/google/callback', '/auth/google/status'];
     if (publicPaths.includes(req.path)) {
         return next();
     }
@@ -84,10 +83,7 @@ async function verificarAutenticacao(req, res, next) {
     const sessionToken = req.headers['x-session-token'] || req.query.sessionToken || req.query.token;
 
     if (!sessionToken) {
-        return res.status(401).json({
-            error: 'Não autenticado',
-            message: 'Token de sessão não encontrado'
-        });
+        return res.status(401).json({ error: 'Não autenticado' });
     }
 
     try {
@@ -98,9 +94,7 @@ async function verificarAutenticacao(req, res, next) {
         });
 
         if (!verifyResponse.ok) {
-            return res.status(401).json({
-                error: 'Sessão inválida'
-            });
+            return res.status(401).json({ error: 'Sessão inválida' });
         }
 
         const sessionData = await verifyResponse.json();
@@ -113,42 +107,42 @@ async function verificarAutenticacao(req, res, next) {
 }
 
 // ==========================================
-// ROTAS DE AUTENTICAÇÃO ONEDRIVE
+// ROTAS DE AUTENTICAÇÃO GOOGLE
 // ==========================================
 
-// Iniciar autenticação OneDrive
-app.get('/auth/onedrive', (req, res) => {
+// Iniciar autenticação
+app.get('/auth/google', (req, res) => {
     try {
-        const authUrl = onedriveAuth.getAuthUrl();
+        const authUrl = googleAuth.getAuthUrl();
         res.redirect(authUrl);
     } catch (error) {
-        console.error('❌ Erro ao gerar URL de autenticação:', error);
+        console.error('❌ Erro ao gerar URL:', error);
         res.status(500).send('Erro ao iniciar autenticação');
     }
 });
 
-// Callback da autenticação
-app.get('/auth/onedrive/callback', async (req, res) => {
+// Callback
+app.get('/auth/google/callback', async (req, res) => {
     const { code } = req.query;
     
     if (!code) {
-        return res.status(400).send('Código de autenticação não recebido');
+        return res.status(400).send('Código não recebido');
     }
     
     try {
-        console.log('🔐 Autenticando com OneDrive...');
+        console.log('🔐 Autenticando com Google Drive...');
         
-        // Trocar código por token
-        await onedriveAuth.getTokenFromCode(code);
+        await googleAuth.getTokenFromCode(code);
         
-        // Inicializar cliente OneDrive
-        onedriveClient = new OneDriveClient(onedriveAuth);
+        driveClient = new GoogleDriveClient(
+            googleAuth.getClient(),
+            process.env.GOOGLE_DRIVE_FOLDER_NAME || 'Documentos'
+        );
         
-        // Inicializar sincronização
-        syncManager = new SyncManager(onedriveClient, supabase);
+        syncManager = new SyncManager(driveClient, supabase);
         syncManager.startAutoSync(parseInt(process.env.SYNC_INTERVAL_MS) || 300000);
         
-        console.log('✅ Autenticação OneDrive concluída!');
+        console.log('✅ Autenticação concluída!');
         console.log('✅ Sincronização automática iniciada!');
         
         res.send(`
@@ -192,7 +186,7 @@ app.get('/auth/onedrive/callback', async (req, res) => {
             <body>
                 <div class="container">
                     <h1>✅ Autenticação Concluída!</h1>
-                    <p>OneDrive conectado com sucesso!<br>Sincronização automática iniciada.</p>
+                    <p>Google Drive conectado com sucesso!<br>Sincronização automática iniciada.</p>
                     <a href="/">Ir para Documentos</a>
                 </div>
             </body>
@@ -200,48 +194,14 @@ app.get('/auth/onedrive/callback', async (req, res) => {
         `);
     } catch (error) {
         console.error('❌ Erro na autenticação:', error);
-        res.status(500).send(`
-            <!DOCTYPE html>
-            <html>
-            <head>
-                <title>Erro na Autenticação</title>
-                <style>
-                    body {
-                        font-family: 'Segoe UI', system-ui, sans-serif;
-                        display: flex;
-                        align-items: center;
-                        justify-content: center;
-                        height: 100vh;
-                        margin: 0;
-                        background: #000;
-                        color: #fff;
-                    }
-                    .container {
-                        text-align: center;
-                        padding: 2rem;
-                    }
-                    h1 {
-                        color: #e70000;
-                        margin-bottom: 1rem;
-                    }
-                </style>
-            </head>
-            <body>
-                <div class="container">
-                    <h1>❌ Erro na Autenticação</h1>
-                    <p>${error.message}</p>
-                    <a href="/auth/onedrive">Tentar Novamente</a>
-                </div>
-            </body>
-            </html>
-        `);
+        res.status(500).send('Erro na autenticação: ' + error.message);
     }
 });
 
-// Status da autenticação OneDrive
-app.get('/auth/onedrive/status', async (req, res) => {
+// Status
+app.get('/auth/google/status', async (req, res) => {
     try {
-        const isAuth = await onedriveAuth.isAuthenticated();
+        const isAuth = await googleAuth.isAuthenticated();
         const syncStatus = syncManager ? syncManager.getStatus() : null;
         
         res.json({
@@ -256,20 +216,17 @@ app.get('/auth/onedrive/status', async (req, res) => {
     }
 });
 
-// Continuação do arquivo...
-// (Este arquivo será continuado na Parte 2)
-
 // ==========================================
 // HEALTH CHECK
 // ==========================================
 app.get('/health', async (req, res) => {
     try {
-        const onedriveAuth = await onedriveAuth.isAuthenticated();
+        const googleAuth = await googleAuth.isAuthenticated();
         const syncStatus = syncManager ? syncManager.getStatus() : null;
         
         res.json({
             status: 'healthy',
-            onedrive: onedriveAuth ? 'connected' : 'disconnected',
+            google_drive: googleAuth ? 'connected' : 'disconnected',
             supabase: 'connected',
             sync: syncStatus
         });
@@ -282,17 +239,16 @@ app.get('/health', async (req, res) => {
 });
 
 // ==========================================
-// API - COM AUTENTICAÇÃO
+// API
 // ==========================================
 app.use('/api', verificarAutenticacao);
 
-// Listar conteúdo de uma pasta
+// Listar pasta
 app.get('/api/folders', async (req, res) => {
     try {
         const folderPath = req.query.path || 'Documentos/';
         console.log('📂 Listando:', folderPath);
         
-        // Buscar do Supabase (sincronizado com OneDrive)
         const { data, error } = await supabase
             .from('documents')
             .select('*')
@@ -306,8 +262,8 @@ app.get('/api/folders', async (req, res) => {
             name: item.name,
             type: 'folder',
             path: item.folder_path + item.name + '/',
-            created_at: item.onedrive_created_at,
-            updated_at: item.onedrive_modified_at
+            created_at: item.google_created_at,
+            updated_at: item.google_modified_at
         }));
         
         const files = data.filter(item => !item.is_folder).map(item => ({
@@ -316,9 +272,9 @@ app.get('/api/folders', async (req, res) => {
             path: item.folder_path + item.name,
             size: item.size,
             mimetype: item.mimetype,
-            created_at: item.onedrive_created_at,
-            updated_at: item.onedrive_modified_at,
-            onedrive_id: item.onedrive_id
+            created_at: item.google_created_at,
+            updated_at: item.google_modified_at,
+            google_drive_id: item.google_drive_id
         }));
         
         res.json({
@@ -328,12 +284,12 @@ app.get('/api/folders', async (req, res) => {
             total: data.length
         });
     } catch (error) {
-        console.error('❌ Erro ao listar pasta:', error);
+        console.error('❌ Erro ao listar:', error);
         res.status(500).json({ error: 'Erro ao listar pasta' });
     }
 });
 
-// Busca global
+// Busca
 app.get('/api/search', async (req, res) => {
     try {
         const searchTerm = req.query.q?.toLowerCase() || '';
@@ -359,8 +315,8 @@ app.get('/api/search', async (req, res) => {
             folder: item.folder_path,
             size: item.size,
             mimetype: item.mimetype,
-            created_at: item.onedrive_created_at,
-            updated_at: item.onedrive_modified_at
+            created_at: item.google_created_at,
+            updated_at: item.google_modified_at
         }));
         
         res.json({ results });
@@ -379,80 +335,65 @@ app.post('/api/folders', async (req, res) => {
             return res.status(400).json({ error: 'Nome obrigatório' });
         }
         
-        const folderPath = (parentPath || 'Documentos/').replace('Documentos/', '') + '/' + name;
+        const folder = await driveClient.createFolder(parentPath || 'Documentos/', name);
         
-        // Criar no OneDrive
-        const onedriveFolder = await onedriveClient.createFolder(folderPath);
-        
-        // Adicionar ao Supabase
         await supabase.from('documents').insert({
             name: name,
             folder_path: parentPath || 'Documentos/',
-            onedrive_id: onedriveFolder.id,
-            onedrive_path: folderPath,
-            parent_id: onedriveFolder.parentReference?.id,
+            google_drive_id: folder.id,
+            parent_id: folder.parents ? folder.parents[0] : null,
+            web_view_link: folder.webViewLink,
             is_folder: true,
-            onedrive_created_at: onedriveFolder.createdDateTime,
-            onedrive_modified_at: onedriveFolder.lastModifiedDateTime
+            google_created_at: folder.createdTime,
+            google_modified_at: folder.modifiedTime
         });
         
         res.status(201).json({ message: 'Pasta criada', name });
     } catch (error) {
         console.error('❌ Erro ao criar pasta:', error);
-        if (error.message?.includes('already exists') || error.statusCode === 409) {
-            return res.status(409).json({ error: 'Pasta já existe' });
-        }
         res.status(500).json({ error: 'Erro ao criar pasta' });
     }
 });
 
-// Upload de arquivo
+// Upload
 app.post('/api/upload', upload.single('file'), async (req, res) => {
     try {
         if (!req.file) {
             return res.status(400).json({ error: 'Arquivo não enviado' });
         }
         
-        const folderPath = (req.body.path || 'Documentos/').replace('Documentos/', '');
+        const folderPath = req.body.path || 'Documentos/';
         
-        // Upload no OneDrive
-        const onedriveFile = await onedriveClient.uploadFile(
+        const file = await driveClient.uploadFile(
             folderPath,
             req.file.originalname,
-            req.file.buffer
+            req.file.buffer,
+            req.file.mimetype
         );
         
-        // Criar links
-        const shareLink = await onedriveClient.createShareLink(onedriveFile.id);
-        const downloadLink = await onedriveClient.getDownloadUrl(onedriveFile.id);
-        
-        // Adicionar ao Supabase
         await supabase.from('documents').insert({
             name: req.file.originalname,
-            folder_path: req.body.path || 'Documentos/',
-            onedrive_id: onedriveFile.id,
-            onedrive_path: folderPath + '/' + req.file.originalname,
-            parent_id: onedriveFile.parentReference?.id,
-            share_link: shareLink,
-            download_link: downloadLink,
+            folder_path: folderPath,
+            google_drive_id: file.id,
+            parent_id: file.parents ? file.parents[0] : null,
+            web_view_link: file.webViewLink,
+            web_content_link: file.webContentLink,
+            thumbnail_link: file.thumbnailLink,
             size: req.file.size,
             mimetype: req.file.mimetype,
             is_folder: false,
-            onedrive_created_at: onedriveFile.createdDateTime,
-            onedrive_modified_at: onedriveFile.lastModifiedDateTime
+            google_created_at: file.createdTime,
+            google_modified_at: file.modifiedTime
         });
         
-        res.status(201).json({ message: 'Arquivo enviado', file: { name: req.file.originalname } });
+        res.status(201).json({ message: 'Arquivo enviado' });
     } catch (error) {
         console.error('❌ Erro no upload:', error);
-        if (error.message?.includes('already exists') || error.statusCode === 409) {
-            return res.status(409).json({ error: 'Arquivo já existe' });
-        }
         res.status(500).json({ error: 'Erro ao enviar arquivo' });
     }
 });
 
-// Download de arquivo
+// Download
 app.get('/api/download', async (req, res) => {
     try {
         const filePath = req.query.path;
@@ -461,7 +402,6 @@ app.get('/api/download', async (req, res) => {
             return res.status(400).json({ error: 'Caminho não fornecido' });
         }
         
-        // Buscar info do arquivo no Supabase
         const { data: fileInfo, error } = await supabase
             .from('documents')
             .select('*')
@@ -473,10 +413,8 @@ app.get('/api/download', async (req, res) => {
             return res.status(404).json({ error: 'Arquivo não encontrado' });
         }
         
-        // Obter stream do OneDrive
-        const stream = await onedriveClient.downloadFile(fileInfo.onedrive_id);
+        const stream = await driveClient.downloadFile(fileInfo.google_drive_id);
         
-        // Configurar headers
         const fileName = fileInfo.name;
         const ext = fileName.split('.').pop().toLowerCase();
         const inline = ['pdf', 'xml', 'txt', 'jpg', 'jpeg', 'png'].includes(ext);
@@ -496,7 +434,6 @@ app.delete('/api/delete', async (req, res) => {
     try {
         const { path: itemPath, type } = req.query;
         
-        // Buscar no Supabase
         const { data: item, error: findError } = await supabase
             .from('documents')
             .select('*')
@@ -508,14 +445,12 @@ app.delete('/api/delete', async (req, res) => {
             return res.status(404).json({ error: 'Item não encontrado' });
         }
         
-        // Deletar do OneDrive
-        await onedriveClient.deleteItem(item.onedrive_id);
+        await driveClient.deleteItem(item.google_drive_id);
         
-        // Deletar do Supabase
         await supabase
             .from('documents')
             .delete()
-            .eq('onedrive_id', item.onedrive_id);
+            .eq('google_drive_id', item.google_drive_id);
         
         res.json({ message: 'Item deletado' });
     } catch (error) {
@@ -529,7 +464,6 @@ app.put('/api/rename', async (req, res) => {
     try {
         const { oldPath, newName, type } = req.body;
         
-        // Buscar no Supabase
         const { data: item, error: findError } = await supabase
             .from('documents')
             .select('*')
@@ -541,14 +475,12 @@ app.put('/api/rename', async (req, res) => {
             return res.status(404).json({ error: 'Item não encontrado' });
         }
         
-        // Renomear no OneDrive
-        await onedriveClient.renameItem(item.onedrive_id, newName);
+        await driveClient.renameItem(item.google_drive_id, newName);
         
-        // Atualizar no Supabase
         await supabase
             .from('documents')
             .update({ name: newName })
-            .eq('onedrive_id', item.onedrive_id);
+            .eq('google_drive_id', item.google_drive_id);
         
         res.json({ message: 'Item renomeado' });
     } catch (error) {
@@ -557,7 +489,7 @@ app.put('/api/rename', async (req, res) => {
     }
 });
 
-// Sincronizar manualmente
+// Sincronizar
 app.post('/api/sync', async (req, res) => {
     try {
         if (!syncManager) {
@@ -589,26 +521,28 @@ app.get('/app', (req, res) => {
 app.listen(PORT, '0.0.0.0', async () => {
     console.log('\n🚀 ================================');
     console.log(`🚀 Servidor rodando na porta ${PORT}`);
-    console.log(`💾 Storage: OneDrive + Supabase`);
+    console.log(`💾 Storage: Google Drive + Supabase`);
     console.log(`🔗 Supabase: ${supabaseUrl}`);
     console.log(`🔐 Portal: ${portalUrl}`);
     
-    // Tentar restaurar autenticação OneDrive
     try {
-        const isAuth = await onedriveAuth.isAuthenticated();
+        const isAuth = await googleAuth.isAuthenticated();
         if (isAuth) {
-            console.log('✅ OneDrive: Autenticado');
-            onedriveClient = new OneDriveClient(onedriveAuth);
-            syncManager = new SyncManager(onedriveClient, supabase);
+            console.log('✅ Google Drive: Autenticado');
+            driveClient = new GoogleDriveClient(
+                googleAuth.getClient(),
+                process.env.GOOGLE_DRIVE_FOLDER_NAME || 'Documentos'
+            );
+            syncManager = new SyncManager(driveClient, supabase);
             syncManager.startAutoSync(parseInt(process.env.SYNC_INTERVAL_MS) || 300000);
             console.log('✅ Sincronização automática iniciada');
         } else {
-            console.log('⚠️  OneDrive: NÃO autenticado');
-            console.log(`🔗 Autentique em: http://localhost:${PORT}/auth/onedrive`);
+            console.log('⚠️  Google Drive: NÃO autenticado');
+            console.log(`🔗 Autentique em: http://localhost:${PORT}/auth/google`);
         }
     } catch (error) {
-        console.log('⚠️  OneDrive: Erro ao verificar autenticação');
-        console.log(`🔗 Autentique em: http://localhost:${PORT}/auth/onedrive`);
+        console.log('⚠️  Google Drive: Erro ao verificar autenticação');
+        console.log(`🔗 Autentique em: http://localhost:${PORT}/auth/google`);
     }
     
     console.log('🚀 ================================\n');
