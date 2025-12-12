@@ -266,12 +266,12 @@ app.get('/auth/google/status', async (req, res) => {
 // ==========================================
 app.get('/health', async (req, res) => {
     try {
-        const googleAuth = await googleAuth.isAuthenticated();
+        const isGoogleAuth = await googleAuth.isAuthenticated();
         const syncStatus = syncManager ? syncManager.getStatus() : null;
         
         res.json({
             status: 'healthy',
-            google_drive: googleAuth ? 'connected' : 'disconnected',
+            google_drive: isGoogleAuth ? 'connected' : 'disconnected',
             supabase: 'connected',
             sync: syncStatus,
             realtime: realtimeSync ? 'enabled' : 'disabled'
@@ -289,8 +289,8 @@ app.get('/health', async (req, res) => {
 // ==========================================
 app.use('/api', verificarAutenticacao);
 
-// Listar pasta (COM LINKS OTIMIZADOS)
-app.post('/api/folders', verificarAutenticacao, verificarGoogleDrive, async (req, res) => {
+// Listar pasta (COM LINKS OTIMIZADOS) - CORRIGIDO PARA GET
+app.get('/api/folders', verificarAutenticacao, verificarGoogleDrive, async (req, res) => {
     try {
         const folderPath = req.query.path || 'Documentos/';
         console.log('📂 Listando:', folderPath);
@@ -342,7 +342,7 @@ app.post('/api/folders', verificarAutenticacao, verificarGoogleDrive, async (req
 });
 
 // Busca
-app.get('/api/search', async (req, res) => {
+app.get('/api/search', verificarAutenticacao, async (req, res) => {
     try {
         const searchTerm = req.query.q?.toLowerCase() || '';
         
@@ -384,7 +384,7 @@ app.get('/api/search', async (req, res) => {
 });
 
 // Criar pasta
-app.post('/api/folders', async (req, res) => {
+app.post('/api/folders', verificarAutenticacao, verificarGoogleDrive, async (req, res) => {
     try {
         const { path: parentPath, name } = req.body;
         
@@ -413,7 +413,7 @@ app.post('/api/folders', async (req, res) => {
 });
 
 // Upload
-app.post('/api/upload', upload.single('file'), async (req, res) => {
+app.post('/api/upload', verificarAutenticacao, verificarGoogleDrive, upload.single('file'), async (req, res) => {
     try {
         if (!req.file) {
             return res.status(400).json({ error: 'Arquivo não enviado' });
@@ -451,7 +451,7 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
 });
 
 // Download OTIMIZADO (redirect para link direto)
-app.get('/api/download', async (req, res) => {
+app.get('/api/download', verificarAutenticacao, async (req, res) => {
     try {
         const filePath = req.query.path;
         
@@ -481,7 +481,7 @@ app.get('/api/download', async (req, res) => {
 });
 
 // Deletar
-app.delete('/api/delete', async (req, res) => {
+app.delete('/api/delete', verificarAutenticacao, verificarGoogleDrive, async (req, res) => {
     try {
         const { path: itemPath, type } = req.query;
         
@@ -511,7 +511,7 @@ app.delete('/api/delete', async (req, res) => {
 });
 
 // Renomear
-app.put('/api/rename', async (req, res) => {
+app.put('/api/rename', verificarAutenticacao, verificarGoogleDrive, async (req, res) => {
     try {
         const { oldPath, newName, type } = req.body;
         
@@ -541,7 +541,7 @@ app.put('/api/rename', async (req, res) => {
 });
 
 // Sincronizar manualmente
-app.post('/api/sync', async (req, res) => {
+app.post('/api/sync', verificarAutenticacao, async (req, res) => {
     try {
         if (!syncManager) {
             return res.status(503).json({ error: 'Sincronização não disponível' });
@@ -560,7 +560,7 @@ app.post('/api/sync', async (req, res) => {
 // ==========================================
 
 // Criar ZIP de múltiplos arquivos
-app.post('/api/zip/files', express.json(), async (req, res) => {
+app.post('/api/zip/files', verificarAutenticacao, verificarGoogleDrive, express.json(), async (req, res) => {
     try {
         const { fileIds, zipName } = req.body;
         
@@ -583,7 +583,7 @@ app.post('/api/zip/files', express.json(), async (req, res) => {
 });
 
 // Criar ZIP de uma pasta
-app.post('/api/zip/folder', express.json(), async (req, res) => {
+app.post('/api/zip/folder', verificarAutenticacao, verificarGoogleDrive, express.json(), async (req, res) => {
     try {
         const { folderId, folderName } = req.body;
         
