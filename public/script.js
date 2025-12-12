@@ -9,6 +9,10 @@ let allItems = [];
 let isOnline = false;
 let sessionToken = null;
 
+// Cache para melhorar performance
+const folderCache = new Map();
+const CACHE_DURATION = 60000; // 1 minuto
+
 console.log('🚀 Sistema de Documentos iniciado');
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -51,7 +55,7 @@ function mostrarTelaAcessoNegado(mensagem = 'NÃO AUTORIZADO') {
 
 function inicializarApp() {
     checkServerStatus();
-    setInterval(checkServerStatus, 15000);
+    setInterval(checkServerStatus, 30000); // 30s em vez de 15s
     loadCurrentFolder();
 }
 
@@ -155,6 +159,16 @@ async function loadCurrentFolder() {
     }
 
     const tbody = document.getElementById('filesContainer');
+    
+    // Verificar cache primeiro
+    const cached = folderCache.get(currentPath);
+    if (cached && (Date.now() - cached.timestamp < CACHE_DURATION)) {
+        allItems = cached.items;
+        updateBreadcrumb();
+        renderItems(allItems);
+        return;
+    }
+
     tbody.innerHTML = '<tr><td colspan="5" class="loading">Carregando...</td></tr>';
 
     try {
@@ -178,6 +192,12 @@ async function loadCurrentFolder() {
 
         const data = await response.json();
         allItems = [...data.folders, ...data.files];
+        
+        // Salvar no cache
+        folderCache.set(currentPath, {
+            items: allItems,
+            timestamp: Date.now()
+        });
         
         updateBreadcrumb();
         renderItems(allItems);
@@ -386,6 +406,7 @@ async function filterItems() {
     
     if (searchTimeout) clearTimeout(searchTimeout);
     
+    // Busca local imediata para feedback rápido
     if (!searchTerm) {
         renderItems(allItems);
         return;
@@ -397,7 +418,8 @@ async function filterItems() {
     
     renderItems(localFiltered);
 
-    if (searchTerm.length >= 2) {
+    // Busca global apenas com 3+ caracteres e após 800ms
+    if (searchTerm.length >= 3) {
         searchTimeout = setTimeout(async () => {
             try {
                 const response = await fetch(`${API_URL}/search?q=${encodeURIComponent(searchTerm)}`, {
@@ -422,7 +444,7 @@ async function filterItems() {
             } catch (error) {
                 console.error('Erro na busca global:', error);
             }
-        }, 500);
+        }, 800); // 800ms em vez de 500ms
     }
 }
 
@@ -614,6 +636,10 @@ async function createFolder(event) {
 
         showMessage('Pasta criada com sucesso!', 'success');
         closeModal('newFolderModal');
+        
+        // Invalidar cache
+        folderCache.delete(currentPath);
+        
         loadCurrentFolder();
     } catch (error) {
         console.error('Erro:', error);
@@ -658,6 +684,10 @@ async function uploadFile(file) {
         }
 
         showMessage('Arquivo enviado com sucesso!', 'success');
+        
+        // Invalidar cache
+        folderCache.delete(currentPath);
+        
         loadCurrentFolder();
     } catch (error) {
         console.error('Erro:', error);
@@ -958,6 +988,10 @@ async function renameItem(event, oldPath, type) {
 
         showMessage('Item renomeado com sucesso!', 'success');
         closeModal('renameModal');
+        
+        // Invalidar cache
+        folderCache.delete(currentPath);
+        
         loadCurrentFolder();
     } catch (error) {
         console.error('Erro:', error);
@@ -994,6 +1028,10 @@ window.deleteItem = async function(itemPath, type) {
         }
 
         showMessage('Item excluído com sucesso!', 'success');
+        
+        // Invalidar cache
+        folderCache.delete(currentPath);
+        
         loadCurrentFolder();
     } catch (error) {
         console.error('Erro:', error);
