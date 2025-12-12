@@ -619,7 +619,7 @@ async function createFolder(event) {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
-                'X-Session-Token': sessionToken
+                'X-Session-Token': sessionToken // ⚠️ AQUI PODE ESTAR UNDEFINED
             },
             body: JSON.stringify({
                 path: currentPath,
