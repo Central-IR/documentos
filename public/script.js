@@ -169,10 +169,11 @@ async function loadCurrentFolder() {
 
     try {
         const response = await fetch(`${API_URL}/folders?path=${encodeURIComponent(currentPath)}`, {
-            method: 'GET',
+            method: 'POST',
             headers: { 
                 'X-Session-Token': sessionToken,
-                'Accept': 'application/json'
+                'Accept': 'application/json',
+                'Content-Type': 'application/json'
             }
         });
 
