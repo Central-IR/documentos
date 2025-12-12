@@ -168,12 +168,12 @@ async function loadCurrentFolder() {
     tbody.innerHTML = '<tr><td colspan="5" class="loading">Carregando...</td></tr>';
 
     try {
+        // ✅ USAR GET EM VEZ DE POST
         const response = await fetch(`${API_URL}/folders?path=${encodeURIComponent(currentPath)}`, {
-            method: 'POST',
+            method: 'GET', // ← MUDOU DE POST PARA GET
             headers: { 
                 'X-Session-Token': sessionToken,
-                'Accept': 'application/json',
-                'Content-Type': 'application/json'
+                'Accept': 'application/json'
             }
         });
 
@@ -204,7 +204,6 @@ async function loadCurrentFolder() {
         tbody.innerHTML = '<tr><td colspan="5" class="empty-state">Erro ao carregar conteúdo</td></tr>';
     }
 }
-
 // ============================================
 // RENDERIZAR ITENS (TABELA)
 // ============================================
@@ -616,11 +615,12 @@ async function createFolder(event) {
     }
 
     try {
-        const response = await fetch(`${API_URL}/folders`, {
+        // ✅ URL CORRIGIDA: /api/folders/create
+        const response = await fetch(`${API_URL}/folders/create`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
-                'X-Session-Token': sessionToken // ⚠️ AQUI PODE ESTAR UNDEFINED
+                'X-Session-Token': sessionToken
             },
             body: JSON.stringify({
                 path: currentPath,
