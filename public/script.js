@@ -97,12 +97,8 @@ async function checkServerStatus() {
 
 function updateConnectionStatus() {
     const statusElement = document.getElementById('connectionStatus');
-    const statusText = document.getElementById('statusText');
     if (statusElement) {
         statusElement.className = isOnline ? 'connection-status online' : 'connection-status offline';
-        if (statusText) {
-            statusText.textContent = isOnline ? 'Online' : 'Offline';
-        }
     }
 }
 
