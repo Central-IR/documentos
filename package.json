@@ -1,13 +1,13 @@
 {
-  "name": "sistema-documentos-gdrive",
-  "version": "2.0.0",
-  "description": "Sistema de gerenciamento de documentos - Google Drive + Supabase",
+  "name": "sistema-documentos-gdrive-otimizado",
+  "version": "3.0.0",
+  "description": "Sistema de gerenciamento de documentos - Google Drive + Supabase OTIMIZADO",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
     "dev": "nodemon server.js"
   },
-  "keywords": ["documentos", "google-drive", "supabase", "storage"],
+  "keywords": ["documentos", "google-drive", "supabase", "storage", "realtime", "zip"],
   "author": "",
   "license": "ISC",
   "dependencies": {
@@ -17,7 +17,8 @@
     "googleapis": "^128.0.0",
     "dotenv": "^16.3.1",
     "multer": "^1.4.5-lts.1",
-    "node-cron": "^3.0.3"
+    "node-cron": "^3.0.3",
+    "archiver": "^6.0.1"
   },
   "devDependencies": {
     "nodemon": "^3.0.2"
